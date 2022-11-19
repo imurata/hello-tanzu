@@ -1,11 +1,11 @@
-FROM maven:3.6.2-jdk-13 as builder
+FROM maven:3-amazoncorretto-11 as builder
 
 COPY . /usr/src/
 
 WORKDIR /usr/src/
 RUN mvn -B package
 
-FROM tomcat:8.5-jdk15-openjdk-slim
+FROM tomcat:latest
 
 ENV CATALINA_HOME /usr/local/tomcat
 ENV PATH $CATALINA_HOME/bin:$PATH
