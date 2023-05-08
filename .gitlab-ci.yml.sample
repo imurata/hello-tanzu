@@ -1,0 +1,66 @@
+stages: 
+  - test
+  - build
+  - deploy
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+  IMAGE_REGISTRY: "core.harbor.hogeeee.info"
+  IMAGE_REGISTRY_USERNAME: "imurata"
+  IMAGE_REGISTRY_PASSWORD: "xxxxxx"
+  BUILD_NAMESPACE: "cicd"
+  IMAGE_NAME: hello-tanzu-demo-simple
+  IMAGE_PATH: "${IMAGE_REGISTRY}/myapp/${IMAGE_NAME}"
+
+test-job:
+  image: springci/spring-boot-jdk11-ci-image:master
+  stage: test
+  rules:
+  - if: '$CI_PIPELINE_SOURCE == "push"'
+  script:
+    - ./mvnw clean test
+
+build-job:
+  image: kpack/kp
+  stage: build
+  script:
+  - |
+    kp image save ${IMAGE_NAME} \
+      --tag ${IMAGE_PATH} \
+      --git ${CI_PROJECT_URL}.git \
+      --git-revision ${CI_COMMIT_SHA} \
+      --namespace ${BUILD_NAMESPACE} \
+      --wait
+
+deploy-job:
+  image: core.harbor.hogeeee.info/tkg/docker-aws-kp:latest
+  stage: deploy
+  rules:
+  - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
+  variables:
+    GIT_USER: imurata
+    GIT_TOKEN: "xxxxxx"
+    GIT_MANIFEST_REPO: "https://$GIT_USER:$GIT_TOKEN@gitlab.hogeeee.info/demo/hello-tanzu-manifest.git"
+    MANIFEST_DIR: "./hello-tanzu-manifest/hello-tanzu-cicd-demo-simple"
+    ARGO_URL: argocd.hogeeee.info
+    ARGO_USERNAME: "admin"
+    ARGO_PASSWORD: 'xxxxxx'
+    ARGO_APP: "hello-tanzu-cicd-demo-simple"
+  script:
+  - |
+    set -x
+    mkdir -p ~/.ssh
+
+    git config --global user.email "ci_bot@bot.bot"
+    git config --global user.name "$GIT_USER"
+    git clone ${GIT_MANIFEST_REPO}
+    cd ${MANIFEST_DIR}
+
+    IMAGE_DIGEST=$(kp image status $IMAGE_NAME -n $BUILD_NAMESPACE | grep "LatestImage" | awk '{print $2}')
+    sed -i "s|image: ${IMAGE_PATH}.*|image: ${IMAGE_DIGEST}|" deploy*
+    git --no-pager diff --color=always
+    git add -A
+    git commit -m "(dev) Update image to ${IMAGE_DIGEST}"
+    git push origin main 
+    argocd login ${ARGO_URL} --username ${ARGO_USERNAME} --password ${ARGO_PASSWORD}
+    argocd app sync $ARGO_APP
